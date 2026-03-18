@@ -4,7 +4,9 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = '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';
-const PORT = process.env.PORT || 8080;
+const PORT = parseInt(process.env.PORT, 10) || 8080;
+
+console.log('Starting server on PORT:', PORT);
 
 function sendJSON(res, status, obj) {
   const body = JSON.stringify(obj);
@@ -19,18 +21,20 @@ function sendJSON(res, status, obj) {
 }
 
 const server = http.createServer((req, res) => {
-
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
-  if (req.url === '/health') { sendJSON(res, 200, { status: 'ok' }); return; }
+  if (req.url === '/health' || req.url === '/ping') {
+    sendJSON(res, 200, { status: 'ok', port: PORT });
+    return;
+  }
 
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
     fs.readFile(path.join(__dirname, 'index.html'), 'utf8', (err, html) => {
-      if (err) { res.writeHead(500); res.end('index.html not found'); return; }
+      if (err) { res.writeHead(500); res.end('index.html not found: ' + err.message); return; }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
     });
@@ -45,7 +49,7 @@ const server = http.createServer((req, res) => {
       try {
         messages = JSON.parse(body).messages;
         if (!Array.isArray(messages) || !messages.length) throw new Error('invalid');
-      } catch(e) { sendJSON(res, 400, { error: 'Bad request' }); return; }
+      } catch(e) { sendJSON(res, 400, { error: 'Bad request: ' + e.message }); return; }
 
       const payload = JSON.stringify({
         model: 'llama-3.3-70b-versatile',
@@ -81,20 +85,23 @@ const server = http.createServer((req, res) => {
         });
       });
 
-      gr.on('timeout', () => { gr.destroy(); sendJSON(res, 504, { error: 'Request timed out' }); });
-      gr.on('error', e => { sendJSON(res, 502, { error: e.message }); });
+      gr.on('timeout', () => { gr.destroy(); sendJSON(res, 504, { error: 'Groq timed out' }); });
+      gr.on('error', e => { sendJSON(res, 502, { error: 'Groq network error: ' + e.message }); });
       gr.write(payload);
       gr.end();
     });
     return;
   }
 
-  res.writeHead(404); res.end('Not found');
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
+  res.end('Not found');
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('✅ Chandrakanth Portfolio running on port ' + PORT);
-  console.log('👉 http://localhost:' + PORT);
+  console.log('✅ Server ready on port ' + PORT);
 });
 
-server.on('error', e => { console.error('Server error:', e.message); process.exit(1); });
+server.on('error', e => {
+  console.error('FATAL server error:', e.message);
+  process.exit(1);
+});
