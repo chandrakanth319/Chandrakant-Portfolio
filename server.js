@@ -6,41 +6,46 @@ const path = require('path');
 const GROQ_API_KEY = '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';
 const PORT = process.env.PORT || 3333;
 
-function serveFile(res, filePath, contentType) {
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404); res.end('Not found'); return; }
-    res.writeHead(200, { 'Content-Type': contentType });
-    res.end(data);
+function sendJSON(res, status, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(status, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Content-Length': Buffer.byteLength(body)
   });
+  res.end(body);
 }
 
 const server = http.createServer((req, res) => {
+
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return; }
 
-  // ── Serve portfolio HTML ──
+  if (req.url === '/health') { sendJSON(res, 200, { status: 'ok' }); return; }
+
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
-    serveFile(res, path.join(__dirname, 'index.html'), 'text/html; charset=utf-8');
+    fs.readFile(path.join(__dirname, 'index.html'), 'utf8', (err, html) => {
+      if (err) { res.writeHead(500); res.end('index.html not found'); return; }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    });
     return;
   }
 
-  // ── AI Chat endpoint ──
   if (req.method === 'POST' && req.url === '/chat') {
     let body = '';
-    req.on('data', chunk => body += chunk.toString());
+    req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', () => {
       let messages;
       try {
         messages = JSON.parse(body).messages;
-        if (!messages || !Array.isArray(messages)) throw new Error('Invalid messages');
-      } catch (e) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Bad request: ' + e.message }));
-        return;
-      }
+        if (!Array.isArray(messages) || !messages.length) throw new Error('invalid');
+      } catch(e) { sendJSON(res, 400, { error: 'Bad request' }); return; }
 
       const payload = JSON.stringify({
         model: 'llama-3.3-70b-versatile',
@@ -49,45 +54,37 @@ const server = http.createServer((req, res) => {
         messages
       });
 
-      const options = {
+      const opts = {
         hostname: 'api.groq.com',
+        port: 443,
         path: '/openai/v1/chat/completions',
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${GROQ_API_KEY}`,
+          'Authorization': 'Bearer ' + GROQ_API_KEY,
           'Content-Length': Buffer.byteLength(payload)
-        }
+        },
+        timeout: 30000
       };
 
-      const groqReq = https.request(options, groqRes => {
+      const gr = https.request(opts, gres => {
         let data = '';
-        groqRes.on('data', chunk => data += chunk);
-        groqRes.on('end', () => {
+        gres.on('data', c => { data += c; });
+        gres.on('end', () => {
           try {
-            const parsed = JSON.parse(data);
-            if (parsed.error) {
-              res.writeHead(500, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: parsed.error.message || 'Groq error' }));
-              return;
-            }
-            const reply = parsed.choices?.[0]?.message?.content || 'No response.';
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ reply }));
-          } catch (e) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Parse error: ' + e.message }));
-          }
+            const p = JSON.parse(data);
+            if (gres.statusCode !== 200) { sendJSON(res, 502, { error: p.error?.message || 'Groq error ' + gres.statusCode }); return; }
+            const reply = p.choices?.[0]?.message?.content;
+            if (!reply) { sendJSON(res, 502, { error: 'Empty Groq response' }); return; }
+            sendJSON(res, 200, { reply });
+          } catch(e) { sendJSON(res, 502, { error: 'Parse error: ' + e.message }); }
         });
       });
 
-      groqReq.on('error', e => {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Network error: ' + e.message }));
-      });
-
-      groqReq.write(payload);
-      groqReq.end();
+      gr.on('timeout', () => { gr.destroy(); sendJSON(res, 504, { error: 'Request timed out' }); });
+      gr.on('error', e => { sendJSON(res, 502, { error: e.message }); });
+      gr.write(payload);
+      gr.end();
     });
     return;
   }
@@ -95,7 +92,9 @@ const server = http.createServer((req, res) => {
   res.writeHead(404); res.end('Not found');
 });
 
-server.listen(PORT, () => {
-  console.log(`\n✅ Chandrakanth Portfolio running on port ${PORT}`);
-  console.log(`👉 Open: http://localhost:${PORT}\n`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('✅ Chandrakanth Portfolio running on port ' + PORT);
+  console.log('👉 http://localhost:' + PORT);
 });
+
+server.on('error', e => { console.error('Server error:', e.message); process.exit(1); });
