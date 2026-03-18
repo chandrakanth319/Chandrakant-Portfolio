@@ -1,0 +1,12 @@
+{
+  "name": "chandrakanth-portfolio",
+  "version": "1.0.0",
+  "description": "Gummala Chandrakanth - AI-Powered Portfolio",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
