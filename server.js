@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const GROQ_API_KEY = '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';
-const PORT = process.env.PORT || 3333;
+const PORT = process.env.PORT || 8080;
 
 function sendJSON(res, status, obj) {
   const body = JSON.stringify(obj);
