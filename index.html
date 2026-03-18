@@ -502,6 +502,19 @@ SALARY: Open to discussion based on role and company. Competitive market rates e
     if (t) t.remove();
   }
 
+  async function callChat(messages, attempt) {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages })
+    });
+    if (!res.ok && attempt < 3) {
+      await new Promise(r => setTimeout(r, 3000));
+      return callChat(messages, attempt + 1);
+    }
+    return res.json();
+  }
+
   async function send() {
     const text = inputEl.value.trim();
     if (!text) return;
@@ -511,32 +524,45 @@ SALARY: Open to discussion based on role and company. Competitive market rates e
     history.push({ role: 'user', content: text });
     showTyping();
 
-    try {
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            ...history
-          ]
-        })
-      });
+    // Update typing bubble to show warming up message after 4 seconds
+    const warmupTimer = setTimeout(() => {
+      const t = document.getElementById('typing');
+      if (t) {
+        const bub = t.querySelector('.bubble');
+        if (bub) bub.textContent = '⏳ Server is waking up, please wait 20-30 seconds...';
+      }
+    }, 4000);
 
-      const data = await res.json();
+    try {
+      const messages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...history
+      ];
+
+      const data = await Promise.race([
+        callChat(messages, 1),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 60000))
+      ]);
+
+      clearTimeout(warmupTimer);
       removeTyping();
 
       if (data.error) {
-        addMsg('ai', '⚠️ Error: ' + data.error);
+        addMsg('ai', 'Error: ' + data.error + '\n\nPlease try again in a moment.');
         history.pop();
       } else {
-        const reply = data.reply || 'Sorry, I got an empty response. Please try again.';
+        const reply = data.reply || 'Sorry, empty response. Please try again.';
         history.push({ role: 'assistant', content: reply });
         addMsg('ai', reply);
       }
     } catch (e) {
+      clearTimeout(warmupTimer);
       removeTyping();
-      addMsg('ai', '⚠️ Could not reach the server. Make sure the server is running.');
+      if (e.message === 'timeout') {
+        addMsg('ai', 'The server took too long to respond. This happens on the free plan after inactivity.\n\nPlease refresh the page, wait 30 seconds, then try again.');
+      } else {
+        addMsg('ai', 'Connection error: ' + e.message + '\n\nPlease refresh and try again.');
+      }
       history.pop();
     } finally {
       sendBtn.disabled = false;
@@ -549,6 +575,18 @@ SALARY: Open to discussion based on role and company. Competitive market rates e
   document.querySelectorAll('.qbtn').forEach(b => {
     b.addEventListener('click', () => { inputEl.value = b.dataset.q; send(); });
   });
+
+  // Ping server on page load to wake it up before user types
+  (async function warmup() {
+    try {
+      await fetch('/health');
+      console.log('Server is awake and ready');
+    } catch(e) {
+      // Server sleeping — retry after 5 seconds
+      console.log('Server waking up...');
+      setTimeout(warmup, 5000);
+    }
+  })();
 
 });
 </script>
